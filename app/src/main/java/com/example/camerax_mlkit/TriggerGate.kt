@@ -269,7 +269,7 @@ object TriggerGate {
     // ⛔ [삭제] @Volatile private var detectedNotiShown = false
 
     // 👈 [추가] 비콘 선택창(BeaconSelectionActivity)을 띄우는 알림
-    @SuppressLint("NotificationPermission")
+    @SuppressLint("MissingPermission")
     private fun postBeaconSelection(ctx: Context, beacons: List<ActiveBeacon>) {
         ensureHighChannel(ctx)
 
@@ -309,17 +309,27 @@ object TriggerGate {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .build()
-            .also {
-                @SuppressLint("NotificationPermission")
-                NotificationManagerCompat.from(ctx).notify(NOTI_ID, it)
-            }
+
+        val notification = NotificationCompat.Builder(ctx, CH_PAY_PROMPT)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("여러 매장이 감지됨")
+            .setContentText("탭하여 결제할 매장을 선택하세요.")
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .build()
+
+        @SuppressLint("NotificationPermission")
+        NotificationManagerCompat.from(ctx).notify(NOTI_ID, notification)
+
     }
 
 
     // ─── 알림 유틸 ─────────────────────────
 
     // [수정] 함수 시그니처 변경: (ActiveBeacon?)을 파라미터로 받음
-    @SuppressLint("NotificationPermission")
+    @SuppressLint("MissingPermission")
     private fun postHeadsUp(
         ctx: Context,
         title: String,
@@ -382,10 +392,19 @@ object TriggerGate {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .build()
-            .also {
-                @SuppressLint("NotificationPermission")
-                NotificationManagerCompat.from(ctx).notify(NOTI_ID, it)
-            }
+
+        val notification = NotificationCompat.Builder(ctx, CH_PAY_PROMPT)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setContentIntent(pi)     // ← 이거 넣어야 '탭 → 결제창'
+            .setAutoCancel(true)      // 탭하면 알림 사라지게
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .build()
+
+        @SuppressLint("NotificationPermission")
+        NotificationManagerCompat.from(ctx).notify(NOTI_ID, notification)
     }
 
 
