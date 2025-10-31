@@ -111,7 +111,7 @@ class PaymentPromptActivity : AppCompatActivity() {
                     )
                 )
                 latestQrText = qrText
-                setTokenTextIfPresent(qrText)
+                setTokenTextIfPresent(qrText) // 👈 오류가 발생했던 함수
                 Log.d(TAG, "Secure QR generated (merchant=$merchantId, loc=$locId, fenceId=$fenceId)")
             } catch (t: Throwable) {
                 Log.e(TAG, "QR 토큰 생성 실패", t)
@@ -241,14 +241,13 @@ class PaymentPromptActivity : AppCompatActivity() {
 
     // ── 바텀시트 (결제 선택) ─────────────────────────────────────────
     private fun showOrExpandPayChooser(title: String, message: String) {
-        // ... (이하 코드는 수정 없음) ...
         dialog?.let { existing ->
             existing.findViewById<TextView>(R.id.tvTitle)?.text = title
             existing.findViewById<TextView>(R.id.tvSubtitle)?.text = message
             val sheet = existing.findViewById<View>(com.google.android.material.R.id.design_bottom_sheet)
             sheet?.let { BottomSheetBehavior.from(it).state = BottomSheetBehavior.STATE_EXPANDED }
             sheetView = sheet
-            latestQrText?.let { setTokenTextIfPresent(it) }
+            latestQrText?.let { setTokenTextIfPresent(it) } // 👈 오류가 발생했던 함수
             return
         }
 
@@ -263,20 +262,20 @@ class PaymentPromptActivity : AppCompatActivity() {
 
             d.findViewById<TextView>(R.id.tvTitle)?.text = title
             d.findViewById<TextView>(R.id.tvSubtitle)?.text = message
-            latestQrText?.let { setTokenTextIfPresent(it) }
+            latestQrText?.let { setTokenTextIfPresent(it) } // 👈 오류가 발생했던 함수
 
             d.findViewById<View>(R.id.btnKakao)?.setOnClickListener {
-                d.dismiss(); showKakaoPreview()
+                d.dismiss(); showKakaoPreview() // 👈 오류가 발생했던 함수
             }
             d.findViewById<View>(R.id.btnNaver)?.setOnClickListener {
-                d.dismiss(); showNaverPreview()
+                d.dismiss(); showNaverPreview() // 👈 오류가 발생했던 함수
             }
             // Toss 버튼 → 따릉이 앱 유도
             d.findViewById<View>(R.id.btnToss)?.setOnClickListener {
-                d.dismiss(); openTtareungi(); finish()
+                d.dismiss(); openTtareungi(); finish() // 👈 오류가 발생했던 함수
             }
             d.findViewById<View>(R.id.btnInApp)?.setOnClickListener {
-                d.dismiss(); openInAppScanner(); finish()
+                d.dismiss(); openInAppScanner(); finish() // 👈 오류가 발생했던 함수
             }
             d.findViewById<View>(R.id.btnCancel)?.setOnClickListener {
                 d.dismiss(); finish()
@@ -288,13 +287,202 @@ class PaymentPromptActivity : AppCompatActivity() {
         dialog = d
     }
 
-    // ... (이하 모든 헬퍼 함수들은 수정 없음) ...
+    //
+    // 👈 [추가]
+    //
+    //
+    //
+    // 여기서부터 원본 파일에 있던 헬퍼 함수들입니다.
+    //
+    //
+    //
+    //
+
     // ── QR 이미지(리소스) 길게 눌러 디코딩/검증 ─────────────────────────
     private fun decodeQrFromDrawable(
         @DrawableRes resId: Int,
         onDone: (String?) -> Unit
     ) {
-        // ...
+        val opts = BitmapFactory.Options().apply { inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888 }
+        val bmp = BitmapFactory.decodeResource(resources, resId, opts) ?: run { onDone(null); return }
+        val options = BarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE, Barcode.FORMAT_AZTEC, Barcode.FORMAT_DATA_MATRIX, Barcode.FORMAT_PDF417)
+            .build()
+        val scanner = BarcodeScanning.getClient(options)
+        val image = InputImage.fromBitmap(bmp, 0)
+
+        scanner.process(image)
+            .addOnSuccessListener { list -> onDone(list.firstOrNull()?.rawValue) }
+            .addOnFailureListener { onDone(null) }
     }
-    // ...
+
+    private fun openUrlPreferBrowser(url: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, url.toUri())
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (_: Exception) { Log.w(TAG, "openUrlPreferBrowser failed: $url") }
+    }
+
+    /** 레이아웃에 tvToken id가 있을 때만 표시 */
+    private fun setTokenTextIfPresent(text: String) {
+        val root = sheetView ?: return
+        val tv = root.findViewById<TextView?>(R.id.tvToken) ?: return
+        tv.text = text
+        tv.visibility = View.VISIBLE
+    }
+
+    private fun showPreview(
+        @DrawableRes imgRes: Int,
+        onClick: () -> Unit
+    ) {
+        val dialog = BottomSheetDialog(this)
+        val v = layoutInflater.inflate(R.layout.dialog_qr_preview, null, false)
+        dialog.setContentView(v)
+
+        val img = v.findViewById<ImageView>(R.id.imgPreview)
+        img.setImageResource(imgRes)
+        img.setOnClickListener { onClick() }
+
+        img.setOnLongClickListener { view ->
+            view.alpha = 0.4f
+            Toast.makeText(this, "QR을 분석 중입니다…", Toast.LENGTH_SHORT).show()
+            decodeQrFromDrawable(imgRes) { raw ->
+                runOnUiThread {
+                    view.alpha = 1.0f
+                    if (raw == null) {
+                        Toast.makeText(this, "QR을 인식하지 못했습니다.", Toast.LENGTH_SHORT).show()
+                        return@runOnUiThread
+                    }
+                    val isSecureCandidate = raw.contains(".")
+                    val verified = if (isSecureCandidate) verifyQrAgainstContext(raw) else false
+                    when {
+                        verified -> {
+                            dialog.dismiss()
+                            Toast.makeText(this, "검증 통과: 안전한 결제 QR", Toast.LENGTH_SHORT).show()
+                            showOrExpandPayChooser(getString(R.string.title_pay), getString(R.string.subtitle_pay))
+                        }
+                        raw.startsWith("http://") || raw.startsWith("https://") -> {
+                            dialog.dismiss()
+                            Toast.makeText(this, "일반 QR: 웹으로 이동합니다", Toast.LENGTH_SHORT).show()
+                            openUrlPreferBrowser(raw)
+                        }
+                        else -> Toast.makeText(this, "검증 실패 또는 지원하지 않는 QR입니다.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            true
+        }
+        dialog.setOnCancelListener { /* no-op */ }
+        dialog.show()
+    }
+
+    private fun showKakaoPreview() = showPreview(
+        R.drawable.kakao_qr,
+        onClick = { /* 시연은 길게 눌러 검증 */ }
+    )
+
+    private fun showNaverPreview() = showPreview(
+        R.drawable.naver_qr,
+        onClick = { /* 시연은 길게 눌러 검증 */ }
+    )
+
+    private fun openAccountQr() {
+        val token = latestQrText.orEmpty()
+        startActivity(Intent(this, AccountQrActivity::class.java).putExtra("qr_token", token))
+    }
+
+    private fun openInAppScanner() {
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra("openScanner", true)
+        )
+    }
+
+    private fun openKakaoPay() {
+        val pkgKakaoPay = "com.kakaopay.app"
+        val pkgKakaoTalk = "com.kakao.talk"
+        val tryUris = listOf("kakaotalk://kakaopay/qr", "kakaotalk://kakaopay/home")
+        for (u in tryUris) {
+            try { startActivity(Intent(Intent.ACTION_VIEW, u.toUri())); return } catch (_: Exception) {}
+        }
+        if (launchPackage(pkgKakaoPay)) return
+        if (launchPackage(pkgKakaoTalk)) return
+        openStoreOrWeb(pkgKakaoPay, "카카오페이")
+    }
+
+    private fun openNaverPay() {
+        val qrScheme = "naversearchapp://search?qmenu=qrcode&version=1"
+        try { startActivity(Intent(Intent.ACTION_VIEW, qrScheme.toUri())); return } catch (_: Exception) {}
+        val naverQrHome = "https%3A%2F%2Fm.pay.naver.com%2Fqr%2Fhome"
+        val inApp = "naversearchapp://inappbrowser?url=$naverQrHome&target=inpage&version=6"
+        try { startActivity(Intent(Intent.ACTION_VIEW, inApp.toUri())); return } catch (_: Exception) {}
+        val pkgNaver = "com.nhn.android.search"
+        if (launchPackage(pkgNaver)) return
+        openStoreOrWeb(pkgNaver, "네이버")
+    }
+
+    /** Toss 버튼을 눌렀을 때 따릉이 앱으로 유도 */
+    private fun openTtareungi() {
+        val pkg = "com.dki.spb_android" // 서울자전거(따릉이)
+        if (launchPackage(pkg)) return
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, "market://details?id=$pkg".toUri()))
+        } catch (_: Exception) {
+            startActivity(Intent(Intent.ACTION_VIEW, "https://play.google.com/store/apps/details?id=$pkg".toUri()))
+        }
+    }
+
+    private fun openTossPay() {
+        val tryUris = listOf(
+            "supertoss://toss/pay",
+            "supertoss://toss/home",
+            "supertoss://scan",
+            "toss://scan"
+        )
+        for (u in tryUris) {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, u.toUri())
+                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .setPackage("viva.republica.toss")
+                startActivity(intent)
+                return
+            } catch (_: Exception) { /* try next */ }
+        }
+        val pkgToss = "viva.republica.toss"
+        if (launchPackage(pkgToss)) return
+        openStoreOrWeb(pkgToss, "토스")
+    }
+
+    private fun launchPackage(packageName: String): Boolean = try {
+        val launch = packageManager.getLaunchIntentForPackage(packageName)
+        if (launch != null) {
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(launch)
+            true
+        } else false
+    } catch (_: Exception) { false }
+
+    private fun openStoreOrWeb(packageName: String, storeQuery: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, "market://details?id=$packageName".toUri()))
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, "https://play.google.com/store/apps/details?id=$packageName".toUri()))
+            } catch (_: Exception) {
+                startActivity(Intent(Intent.ACTION_VIEW, "market://search?q=$storeQuery".toUri()))
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        dialog?.setOnShowListener(null)
+        dialog?.setOnCancelListener(null)
+        dialog = null
+        sheetView = null
+        super.onDestroy()
+    }
 }
