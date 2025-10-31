@@ -190,9 +190,6 @@ object TriggerGate {
 
     // ─── 팝업 노출 ─────────────────────────
 
-    // ⛔ [삭제] @Synchronized private fun maybeShow(ctx: Context, reason: String) { ... }
-    // (아래의 evaluateAndShow 함수로 대체됩니다.)
-
     // 👈 [추가] 기존 maybeShow와 markBeaconNearForAWhile 로직을 통합한 새 함수
     @Synchronized
     private fun evaluateAndShow(ctx: Context, reason: String) {
@@ -266,10 +263,9 @@ object TriggerGate {
         // ... (SendBroadcast 로직은 팝업과 분리되어야 하므로 여기서는 일단 제거, 필요시 1개일때만 추가)
     }
 
-    // ⛔ [삭제] @Volatile private var detectedNotiShown = false
-
-    // 👈 [추가] 비콘 선택창(BeaconSelectionActivity)을 띄우는 알림
-    @SuppressLint("MissingPermission")
+    // 비콘 선택창(BeaconSelectionActivity)을 띄우는 알림
+// 비콘 선택 알림
+    @SuppressLint("MissingPermission", "NotificationPermission")
     private fun postBeaconSelection(ctx: Context, beacons: List<ActiveBeacon>) {
         ensureHighChannel(ctx)
 
@@ -278,37 +274,21 @@ object TriggerGate {
             != PackageManager.PERMISSION_GRANTED
         ) {
             Log.w(TAG, "POST_NOTIFICATIONS not granted; skip notification")
-            return // 권한이 없으면 알림을 보내지 않고 함수 종료
+            return
         }
 
-        // 👇 3단계에서 만들 'BeaconSelectionActivity'로 인텐트
         val intent = Intent(ctx, BeaconSelectionActivity::class.java).apply {
-            // ActiveBeacon은 복잡하므로, 이름과 식별자(key) 배열을 넘김
             val names = beacons.mapNotNull { it.name }.toTypedArray()
-            val keys = beacons.map { "${it.uuid}|${it.major}|${it.minor}" }.toTypedArray()
-
+            val keys  = beacons.map { "${it.uuid}|${it.major}|${it.minor}" }.toTypedArray()
             putExtra("BEACON_NAMES", names)
-            putExtra("BEACON_KEYS", keys)
-
+            putExtra("BEACON_KEYS",  keys)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
 
         val pi = PendingIntent.getActivity(
-            ctx,
-            0, // reqCode
-            intent,
+            ctx, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
-        NotificationCompat.Builder(ctx, CH_PAY_PROMPT)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("여러 매장이 감지됨")
-            .setContentText("탭하여 결제할 매장을 선택하세요.")
-            .setContentIntent(pi)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .build()
 
         val notification = NotificationCompat.Builder(ctx, CH_PAY_PROMPT)
             .setSmallIcon(R.mipmap.ic_launcher)
@@ -320,55 +300,51 @@ object TriggerGate {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .build()
 
-        @SuppressLint("NotificationPermission")
         NotificationManagerCompat.from(ctx).notify(NOTI_ID, notification)
-
     }
+
 
 
     // ─── 알림 유틸 ─────────────────────────
 
     // [수정] 함수 시그니처 변경: (ActiveBeacon?)을 파라미터로 받음
-    @SuppressLint("MissingPermission")
+    // 결제 안내(헤드업) 알림
+    @SuppressLint("MissingPermission", "NotificationPermission")
     private fun postHeadsUp(
         ctx: Context,
         title: String,
         message: String,
         reason: String,
-        beacon: ActiveBeacon? //
+        beacon: ActiveBeacon?
     ) {
         ensureHighChannel(ctx)
 
-        // 👇 [추가] postBeaconSelection과 동일한 알림 권한 체크
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
         ) {
             Log.w(TAG, "POST_NOTIFICATIONS not granted; skip notification")
-            return // 권한이 없으면 알림을 보내지 않고 함수 종료
+            return
         }
 
-        // 👇 사용자가 알림을 탭했을 때 열릴 화면
         val intent = Intent(ctx, PaymentPromptActivity::class.java).apply {
-            putExtra(PaymentPromptActivity.EXTRA_TITLE, title)
+            putExtra(PaymentPromptActivity.EXTRA_TITLE,   title)
             putExtra(PaymentPromptActivity.EXTRA_MESSAGE, message)
             putExtra(PaymentPromptActivity.EXTRA_TRIGGER, reason)
 
-            //  전역 상태 대신, 전달받은 비콘 정보(또는 null)를 Intent에 직접 삽입
             if (beacon != null) {
                 putExtra("beacon", true)
-                putExtra("beacon_name", beacon.name)
-                putExtra("beacon_locationId", beacon.locationId)
-                putExtra("beacon_merchantId", beacon.merchantId)
-                putExtra("beacon_uuid", beacon.uuid)
-                putExtra("beacon_major", beacon.major)
-                putExtra("beacon_minor", beacon.minor)
-                putExtra("beacon_nonce", beacon.nonce) // (필요시 nonce도 전달)
+                putExtra("beacon_name",        beacon.name)
+                putExtra("beacon_locationId",  beacon.locationId)
+                putExtra("beacon_merchantId",  beacon.merchantId)
+                putExtra("beacon_uuid",        beacon.uuid)
+                putExtra("beacon_major",       beacon.major)
+                putExtra("beacon_minor",       beacon.minor)
+                putExtra("beacon_nonce",       beacon.nonce)
             } else {
                 putExtra("beacon", false)
             }
 
-            // 전역 상태(global state)를 사용
             putExtra("geo", inGeofence)
             putExtra("wifi", onTrustedWifi)
             putExtra("fenceId", lastFenceId ?: "unknown")
@@ -376,36 +352,23 @@ object TriggerGate {
         }
 
         val pi = PendingIntent.getActivity(
-            ctx,
-            0,
-            intent,
+            ctx, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
-        // ... (NotificationCompat.Builder ... )
-        NotificationCompat.Builder(ctx, CH_PAY_PROMPT)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setContentIntent(pi)     // ← 이거 넣어야 '탭 → 결제창'
-            .setAutoCancel(true)      // 탭하면 알림 사라지게
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .build()
 
         val notification = NotificationCompat.Builder(ctx, CH_PAY_PROMPT)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
             .setContentText(message)
-            .setContentIntent(pi)     // ← 이거 넣어야 '탭 → 결제창'
-            .setAutoCancel(true)      // 탭하면 알림 사라지게
+            .setContentIntent(pi)
+            .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .build()
 
-        @SuppressLint("NotificationPermission")
         NotificationManagerCompat.from(ctx).notify(NOTI_ID, notification)
     }
+
 
 
     fun cancelHeadsUp(ctx: Context) =
