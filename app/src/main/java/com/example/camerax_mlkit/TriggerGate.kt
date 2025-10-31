@@ -269,6 +269,7 @@ object TriggerGate {
     // ⛔ [삭제] @Volatile private var detectedNotiShown = false
 
     // 👈 [추가] 비콘 선택창(BeaconSelectionActivity)을 띄우는 알림
+    @SuppressLint("NotificationPermission")
     private fun postBeaconSelection(ctx: Context, beacons: List<ActiveBeacon>) {
         ensureHighChannel(ctx)
 
@@ -309,7 +310,6 @@ object TriggerGate {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .build()
             .also {
-                // 👇 [추가] 이미 위에서 권한 체크를 했으므로, 린트 경고를 무시하도록 어노테이션 추가
                 @SuppressLint("NotificationPermission")
                 NotificationManagerCompat.from(ctx).notify(NOTI_ID, it)
             }
@@ -319,6 +319,7 @@ object TriggerGate {
     // ─── 알림 유틸 ─────────────────────────
 
     // [수정] 함수 시그니처 변경: (ActiveBeacon?)을 파라미터로 받음
+    @SuppressLint("NotificationPermission")
     private fun postHeadsUp(
         ctx: Context,
         title: String,
@@ -382,7 +383,6 @@ object TriggerGate {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .build()
             .also {
-                // 👇 [추가] 이미 위에서 권한 체크를 했으므로, 린트 경고를 무시하도록 어노테이션 추가
                 @SuppressLint("NotificationPermission")
                 NotificationManagerCompat.from(ctx).notify(NOTI_ID, it)
             }
