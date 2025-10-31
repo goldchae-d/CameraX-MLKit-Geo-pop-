@@ -1,6 +1,7 @@
 package com.example.camerax_mlkit
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -18,7 +19,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.example.camerax_mlkit.security.WhitelistManager
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.ConcurrentHashMap // 👈 [추가]
 
 /**
  * 결제 안내 노출의 단일 진입 게이트.
@@ -38,24 +39,32 @@ object TriggerGate {
 
     @Volatile private var onTrustedWifi: Boolean = false
     @Volatile private var inGeofence: Boolean = false
-    @Volatile private var nearBeacon: Boolean = false
+    // @Volatile private var nearBeacon: Boolean = false (이제 activeBeacons.isNotEmpty()로 대체)
     @Volatile private var lastFenceId: String? = null
 
-    data class BeaconMeta(
+    //data class BeaconMeta(...)
+    // private val currentBeaconRef = AtomicReference<BeaconMeta?>(null)
+
+    // 1단계에서 whitelist.json에 추가한 "name" 필드를 포함하는 새 데이터 클래스
+    data class ActiveBeacon(
         val uuid: String,
         val major: Int,
         val minor: Int,
+        val name: String?, //  사용자가 볼 매장 이름
         val locationId: String?,
         val merchantId: String?,
         val nonce: String?,
-        val rssi: Int
+        val rssi: Int,
+        var lastSeen: Long = 0L // 타임아웃 처리를 위한 마지막 감지 시각
     )
-    private val currentBeaconRef = AtomicReference<BeaconMeta?>(null)
+    //  활성 비콘 목록을 저장할 맵 (Key = "UUID|Major|Minor")
+    private val activeBeacons = ConcurrentHashMap<String, ActiveBeacon>()
+
 
     private var lastShownAt = 0L
     private const val COOLDOWN_MS = 3000L
     private const val BEACON_NEAR_TIMEOUT_MS = 15000L
-    private var beaconNearUntil = 0L
+    // private var beaconNearUntil = 0L (이제 activeBeacons의 lastSeen으로 개별 관리)
 
     // QR 경로에서도 동일 정책
     fun allowedForQr(): Boolean {
@@ -67,14 +76,15 @@ object TriggerGate {
         inGeofence = inZone
         lastFenceId = fenceId?.lowercase()
 
-        val beaconLoc = currentBeaconRef.get()?.locationId?.lowercase()
+        // 👈 [수정] 로그 로직 변경: 활성 비콘 개수로 확인
         Log.d(
             TAG,
             "Geofence → in=$inGeofence fenceId=$lastFenceId " +
-                    "beaconNear=$nearBeacon beaconLoc=$beaconLoc wifi=$onTrustedWifi"
+                    "activeBeacons=${activeBeacons.size} wifi=$onTrustedWifi"
         )
 
-        maybeShow(ctx, reason = "GEOFENCE")
+        // 👈 [수정] 팝업 로직을 새 함수로 호출
+        evaluateAndShow(ctx, reason = "GEOFENCE")
         if (!inZone) cancelHeadsUp(ctx)
     }
 
@@ -88,48 +98,46 @@ object TriggerGate {
         rssi: Int
     ) {
         val entry = WhitelistManager.findBeacon(uuid, major, minor)
-        nearBeacon = entry != null
+        // nearBeacon = entry != null (더 이상 사용 안함)
 
         if (entry != null) {
-            currentBeaconRef.set(
-                BeaconMeta(
-                    uuid = uuid,
-                    major = major,
-                    minor = minor,
-                    locationId = entry.locationId,
-                    merchantId = entry.merchantId,
-                    nonce = nonce,
-                    rssi = rssi
-                )
+            // 맵에 저장할 고유 키
+            val key = "$uuid|$major|$minor"
+            // ActiveBeacon 객체 생성 (whitelist.json의 "name" 포함)
+            val activeBeacon = ActiveBeacon(
+                uuid = uuid,
+                major = major,
+                minor = minor,
+                name = entry.name, //  1단계에서 추가한 매장 이름
+                locationId = entry.locationId,
+                merchantId = entry.merchantId,
+                nonce = nonce,
+                rssi = rssi,
+                lastSeen = System.currentTimeMillis() // 현재 시각
             )
-            markBeaconNearForAWhile(ctx)
+            // 맵에 추가 또는 갱신
+            activeBeacons[key] = activeBeacon
+
+            //  팝업 로직을 새 함수로 호출
+            evaluateAndShow(ctx, reason = "BEACON")
+
         } else {
-            currentBeaconRef.set(null)
-            nearBeacon = false
-            cancelHeadsUp(ctx)
+            // ⛔ [삭제] 'else' 블록: 화이트리스트에 없는 비콘은 무시.
+            // 기존 비콘의 제거는 evaluateAndShow의 타임아웃 로직이 담당.
         }
 
         val fenceLoc = lastFenceId?.lowercase()
         val beaconLoc = entry?.locationId?.lowercase()
+        // 👈 [수정] 로그 로직 변경
         Log.d(
             TAG,
-            "Beacon → near=$nearBeacon uuid=$uuid major=$major minor=$minor rssi=$rssi " +
+            "Beacon → active=${entry != null} uuid=$uuid major=$major minor=$minor rssi=$rssi " +
                     "beaconLoc=$beaconLoc fenceLoc=$fenceLoc"
         )
     }
 
-    private fun markBeaconNearForAWhile(ctx: Context) {
-        beaconNearUntil = System.currentTimeMillis() + BEACON_NEAR_TIMEOUT_MS
-        maybeShow(ctx, reason = "BEACON")
-        Handler(Looper.getMainLooper()).postDelayed({
-            if (System.currentTimeMillis() >= beaconNearUntil) {
-                nearBeacon = false
-                currentBeaconRef.set(null)
-                cancelHeadsUp(ctx)
-                Log.d(TAG, "Beacon near timeout → near=false")
-            }
-        }, BEACON_NEAR_TIMEOUT_MS)
-    }
+    // ⛔ [삭제] private fun markBeaconNearForAWhile(ctx: Context) { ... }
+    // (이 로직은 아래 evaluateAndShow 함수로 통합/대체되었습니다.)
 
     // ─── Wi-Fi ─────────────────────────────
     fun setTrustedWifi(ok: Boolean, ctx: Context) {
@@ -137,7 +145,8 @@ object TriggerGate {
         if (!ok) {
             cancelHeadsUp(ctx)
         } else {
-            maybeShow(ctx, reason = "WIFI")
+            // 👈 [수정] 팝업 로직을 새 함수로 호출
+            evaluateAndShow(ctx, reason = "WIFI")
         }
         Log.d(TAG, "TrustedWiFi → $onTrustedWifi")
     }
@@ -150,10 +159,17 @@ object TriggerGate {
         // 끝
     }
 
-    fun getCurrentBeacon(): BeaconMeta? = currentBeaconRef.get()
+    //fun getCurrentBeacon(): BeaconMeta? = currentBeaconRef.get()
+    // (PaymentPromptActivity는 이제 Intent로부터 직접 비콘 정보를 전달받아야 합니다.)
+
+    //  (필요시 사용) 현재 활성 비콘 목록을 반환하는 함수
+    fun getActiveBeacons(): List<ActiveBeacon> = activeBeacons.values.toList()
+
     // ─── 정책 평가 ─────────────────────────
     fun evaluatePolicy(): Triple<Boolean, String?, String?> {
-        val beaconLoc = currentBeaconRef.get()?.locationId?.lowercase()
+        //  단일 비콘(currentBeaconRef) 대신, 활성 비콘 목록의 첫 번째를 기준으로 평가
+        val firstBeacon = activeBeacons.values.firstOrNull()
+        val beaconLoc = firstBeacon?.locationId?.lowercase()
         val fenceLocRaw = lastFenceId?.lowercase()
 
         // 시연모드: 비콘이 있으면 그 비콘 위치로 지오펜스를 맞춘다
@@ -166,68 +182,94 @@ object TriggerGate {
         val locMatch = beaconLoc != null && fenceLoc != null && beaconLoc == fenceLoc
         val geoOk = if (FORCE_GEOFENCE) true else inGeofence
 
-        // 최종 정책
-        val allow = nearBeacon || onTrustedWifi
-        //val allow =
-        //    (geoOk && nearBeacon && locMatch) ||
-        //            onTrustedWifi
+        // 👈 [수정] nearBeacon 대신 activeBeacons 맵의 크기로 판별
+        val allow = activeBeacons.isNotEmpty() || onTrustedWifi
+
         return Triple(allow, beaconLoc, fenceLoc)
     }
 
     // ─── 팝업 노출 ─────────────────────────
+
+    // ⛔ [삭제] @Synchronized private fun maybeShow(ctx: Context, reason: String) { ... }
+    // (아래의 evaluateAndShow 함수로 대체됩니다.)
+
+    // 👈 [추가] 기존 maybeShow와 markBeaconNearForAWhile 로직을 통합한 새 함수
     @Synchronized
-    private fun maybeShow(ctx: Context, reason: String) {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastShownAt <= COOLDOWN_MS) return
+    private fun evaluateAndShow(ctx: Context, reason: String) {
+        val now = System.currentTimeMillis()
 
-        val (allow, beaconLoc, fenceLoc) = evaluatePolicy()
-        val locMatch = (beaconLoc != null && fenceLoc != null && beaconLoc == fenceLoc)
+        // 1. 타임아웃된 비콘 정리 (기존 markBeaconNearForAWhile의 타이머 로직 대체)
+        val keysToRemove = activeBeacons.filter { (now - it.value.lastSeen) > BEACON_NEAR_TIMEOUT_MS }.keys
+        keysToRemove.forEach {
+            activeBeacons.remove(it)
+            Log.d(TAG, "Beacon timeout → $it removed")
+        }
 
-        if (!allow) {
-            Log.d(
-                TAG,
-                "Popup BLOCK → geo=$inGeofence beacon=$nearBeacon wifi=$onTrustedWifi " +
-                        "beaconLoc=$beaconLoc fenceLoc=$fenceLoc locMatch=$locMatch"
-            )
+        // 2. 현재 활성 비콘 목록 확인
+        val currentActiveList = activeBeacons.values.toList()
+
+        // 3. 정책 평가
+        val wifiOnly = onTrustedWifi && currentActiveList.isEmpty()
+        val beaconsDetected = currentActiveList.isNotEmpty()
+        // 👈 [추가] 지오펜스 단독 트리거 여부 (다른 조건이 없을 때만)
+        val geoOnly = reason == "GEOFENCE" && !wifiOnly && !beaconsDetected
+
+        // 4. 팝업 조건 확인
+        if (!wifiOnly && !beaconsDetected && !geoOnly) {
+            Log.d(TAG, "Popup BLOCK → No active conditions.")
+            cancelHeadsUp(ctx) // (선택) 모든 조건이 사라졌으면 알림 취소
             return
         }
 
-        // ✅ 여기: 이미 한 번 보여줬으면 또 안 띄움
-        if (detectedNotiShown) {
-            Log.d(TAG, "Popup skipped (already shown once)")
+        // 5. 쿨다운
+        val nowClock = SystemClock.elapsedRealtime()
+        if (nowClock - lastShownAt <= COOLDOWN_MS) {
+            Log.d(TAG, "Popup BLOCK → Cooldown active.")
             return
         }
 
-        // 여기까지 왔으면 이번이 첫 노출
-        detectedNotiShown = true
-        lastShownAt = now
+        // ⛔ [삭제] 'detectedNotiShown' 관련 로직 (쿨다운이 있으므로 삭제, 매번 알림)
+        lastShownAt = nowClock
 
-        // 알림 문구: 비콘 또는 Wi-Fi면 공통으로 사용
-        val message = when (reason) {
-            "WIFI",
-            "BEACON"   -> "정상 매장이 감지되었습니다."
-            "GEOFENCE" -> "매장 반경에 진입했습니다."
-            else       -> "결제 안내"
+        // 6. 팝업 분기 (사용자 요청 사항)
+        when {
+            // 👈 [분기 1] 비콘이 2개 이상 감지됨
+            currentActiveList.size > 1 -> {
+                Log.d(TAG, "Popup → Multiple beacons (${currentActiveList.size}). Launching selection.")
+                // 👈 [추가] 비콘 선택창을 띄우는 새 알림 함수 호출
+                postBeaconSelection(ctx, currentActiveList)
+            }
+
+            // 👈 [분기 2] 비콘이 1개만 감지됨
+            currentActiveList.size == 1 -> {
+                val singleBeacon = currentActiveList.first()
+                val title = singleBeacon.name ?: "결제 안내" // 👈 1단계에서 추가한 이름 사용
+                val msg = "정상 매장이 감지되었습니다."
+                Log.d(TAG, "Popup → Single beacon (${title}). Launching payment prompt.")
+                // 👈 [수정] postHeadsUp에 비콘 정보를 명시적으로 전달
+                postHeadsUp(ctx, title, msg, "BEACON", singleBeacon)
+            }
+
+            // 👈 [분기 3] Wi-Fi만 감지됨 (비콘 없음)
+            wifiOnly -> {
+                Log.d(TAG, "Popup → Trusted Wi-Fi only. Launching payment prompt.")
+                postHeadsUp(ctx, "결제 안내", "정상 매장이 감지되었습니다.", "WIFI", null)
+            }
+
+            // 👈 [분기 4] 지오펜스만 감지됨 (비콘/Wi-Fi 없음)
+            geoOnly -> {
+                Log.d(TAG, "Popup → Geofence only. Launching payment prompt.")
+                postHeadsUp(ctx, "결제 안내", "매장 반경에 진입했습니다.", "GEOFENCE", null)
+            }
         }
 
-        postHeadsUp(ctx, title = "결제 안내", message = message, reason = reason)
-
-        if (isAppForeground()) {
-            ctx.sendBroadcast(Intent(ACTION_PAY_PROMPT).apply {
-                putExtra("reason", reason)
-                putExtra("geo", inGeofence)
-                putExtra("beacon", nearBeacon)
-                putExtra("wifi", onTrustedWifi)
-                putExtra("fenceId", fenceLoc ?: "unknown")
-            })
-        }
+        // ... (SendBroadcast 로직은 팝업과 분리되어야 하므로 여기서는 일단 제거, 필요시 1개일때만 추가)
     }
 
+    // ⛔ [삭제] @Volatile private var detectedNotiShown = false
 
-    @Volatile private var detectedNotiShown = false
-
-    // ─── 알림 유틸 ─────────────────────────
-    private fun postHeadsUp(ctx: Context, title: String, message: String, reason: String) {
+    // 👈 [추가] 비콘 선택창(BeaconSelectionActivity)을 띄우는 알림
+    private fun postBeaconSelection(ctx: Context, beacons: List<ActiveBeacon>) {
         ensureHighChannel(ctx)
 
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -235,7 +277,64 @@ object TriggerGate {
             != PackageManager.PERMISSION_GRANTED
         ) {
             Log.w(TAG, "POST_NOTIFICATIONS not granted; skip notification")
-            return
+            return // 권한이 없으면 알림을 보내지 않고 함수 종료
+        }
+
+        // 👇 3단계에서 만들 'BeaconSelectionActivity'로 인텐트
+        val intent = Intent(ctx, BeaconSelectionActivity::class.java).apply {
+            // ActiveBeacon은 복잡하므로, 이름과 식별자(key) 배열을 넘김
+            val names = beacons.mapNotNull { it.name }.toTypedArray()
+            val keys = beacons.map { "${it.uuid}|${it.major}|${it.minor}" }.toTypedArray()
+
+            putExtra("BEACON_NAMES", names)
+            putExtra("BEACON_KEYS", keys)
+
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+
+        val pi = PendingIntent.getActivity(
+            ctx,
+            0, // reqCode
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        NotificationCompat.Builder(ctx, CH_PAY_PROMPT)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("여러 매장이 감지됨")
+            .setContentText("탭하여 결제할 매장을 선택하세요.")
+            .setContentIntent(pi)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .build()
+            .also {
+                // 👇 [추가] 이미 위에서 권한 체크를 했으므로, 린트 경고를 무시하도록 어노테이션 추가
+                @SuppressLint("NotificationPermission")
+                NotificationManagerCompat.from(ctx).notify(NOTI_ID, it)
+            }
+    }
+
+
+    // ─── 알림 유틸 ─────────────────────────
+
+    // [수정] 함수 시그니처 변경: (ActiveBeacon?)을 파라미터로 받음
+    private fun postHeadsUp(
+        ctx: Context,
+        title: String,
+        message: String,
+        reason: String,
+        beacon: ActiveBeacon? //
+    ) {
+        ensureHighChannel(ctx)
+
+        // 👇 [추가] postBeaconSelection과 동일한 알림 권한 체크
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.w(TAG, "POST_NOTIFICATIONS not granted; skip notification")
+            return // 권한이 없으면 알림을 보내지 않고 함수 종료
         }
 
         // 👇 사용자가 알림을 탭했을 때 열릴 화면
@@ -243,8 +342,23 @@ object TriggerGate {
             putExtra(PaymentPromptActivity.EXTRA_TITLE, title)
             putExtra(PaymentPromptActivity.EXTRA_MESSAGE, message)
             putExtra(PaymentPromptActivity.EXTRA_TRIGGER, reason)
+
+            //  전역 상태 대신, 전달받은 비콘 정보(또는 null)를 Intent에 직접 삽입
+            if (beacon != null) {
+                putExtra("beacon", true)
+                putExtra("beacon_name", beacon.name)
+                putExtra("beacon_locationId", beacon.locationId)
+                putExtra("beacon_merchantId", beacon.merchantId)
+                putExtra("beacon_uuid", beacon.uuid)
+                putExtra("beacon_major", beacon.major)
+                putExtra("beacon_minor", beacon.minor)
+                putExtra("beacon_nonce", beacon.nonce) // (필요시 nonce도 전달)
+            } else {
+                putExtra("beacon", false)
+            }
+
+            // 전역 상태(global state)를 사용
             putExtra("geo", inGeofence)
-            putExtra("beacon", nearBeacon)
             putExtra("wifi", onTrustedWifi)
             putExtra("fenceId", lastFenceId ?: "unknown")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -257,6 +371,7 @@ object TriggerGate {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // ... (NotificationCompat.Builder ... )
         NotificationCompat.Builder(ctx, CH_PAY_PROMPT)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(title)
@@ -266,7 +381,11 @@ object TriggerGate {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .build()
-            .also { NotificationManagerCompat.from(ctx).notify(NOTI_ID, it) }
+            .also {
+                // 👇 [추가] 이미 위에서 권한 체크를 했으므로, 린트 경고를 무시하도록 어노테이션 추가
+                @SuppressLint("NotificationPermission")
+                NotificationManagerCompat.from(ctx).notify(NOTI_ID, it)
+            }
     }
 
 

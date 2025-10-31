@@ -4,6 +4,7 @@
       "uuid": "74278BDA-B644-4520-8F0C-720EAF059935",
       "major": 40011,
       "minor": 54704,
+      "name": "덕성 A 매장 (차미리사관)",
       "locationId": "store_duksung_a",
       "merchantId": "merchant_duksung",
       "pubkey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\n-----END PUBLIC KEY-----"
@@ -12,6 +13,7 @@
       "uuid": "74278BDA-B644-4520-8F0C-720EAF059935",
       "major": 40011,
       "minor": 54705,
+      "name": "덕성 B 매장 (하나누리관)",
       "locationId": "store_duksung_b",
       "merchantId": "merchant_duksung",
       "pubkey": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\n-----END PUBLIC KEY-----"

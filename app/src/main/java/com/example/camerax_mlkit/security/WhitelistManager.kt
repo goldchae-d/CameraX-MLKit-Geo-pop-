@@ -14,6 +14,7 @@ object WhitelistManager {
         val uuid: String,
         val major: Int,
         val minor: Int,
+        val name: String?, // 👈 [추가] 사용자가 볼 매장 이름
         val locationId: String?,
         val merchantId: String?,
         val pubkeyPem: String?
@@ -39,7 +40,9 @@ object WhitelistManager {
                 val major = o.getInt("major")
                 val minor = o.getInt("minor")
 
-                // ✅ camelCase & snake_case 모두 지원
+                val name = o.optString("name", null) // 👈 [추가] "name" 필드 읽기
+
+                // тЬЕ camelCase & snake_case ыкиыСР ьзАьЫР
                 val locId = when {
                     o.has("locationId")   -> o.optString("locationId", null)
                     o.has("location_id")  -> o.optString("location_id", null)
@@ -52,7 +55,8 @@ object WhitelistManager {
                 }
                 val pub   = o.optString("pubkey", null)
 
-                val entry = BeaconEntry(uuid, major, minor, locId, merch, pub)
+                // 👈 [수정] 생성자에 'name' 추가
+                val entry = BeaconEntry(uuid, major, minor, name, locId, merch, pub)
                 map[key(uuid, major, minor)] = entry
                 if (!merch.isNullOrBlank() && !pub.isNullOrBlank()) merchantKey[merch] = pub
             }
